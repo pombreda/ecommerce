@@ -4,7 +4,7 @@ import logging
 from oscar.core.loading import get_model, get_class
 
 from ecommerce.extensions.api import errors
-from ecommerce.extensions.api.constants import EcommerceAPIConstants as AC
+from ecommerce.extensions.api.constants import APIConstants as AC
 
 
 logger = logging.getLogger(__name__)

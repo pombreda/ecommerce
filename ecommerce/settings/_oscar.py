@@ -7,7 +7,7 @@ from django.core.urlresolvers import reverse_lazy
 from oscar.defaults import *
 from oscar import get_core_apps
 
-from ecommerce.extensions.fulfillment.status import ORDER, LINE
+from ecommerce.extensions.order.constants import OrderStatus as ORDER, LineStatus as LINE
 
 
 # URL CONFIGURATION
@@ -36,28 +36,16 @@ OSCAR_INITIAL_ORDER_STATUS = ORDER.OPEN
 OSCAR_INITIAL_LINE_STATUS = LINE.OPEN
 
 # This dict defines the new order statuses than an order can move to
-# TODO: Update to reflect new order life cycle. As long as the "Complete"
-# state is kept here and below, this shouldn't disrupt the way the LMS uses v1.
 OSCAR_ORDER_STATUS_PIPELINE = {
-    ORDER.OPEN: (ORDER.BEING_PROCESSED, ORDER.ORDER_CANCELLED,),
-    ORDER.ORDER_CANCELLED: (),
-    ORDER.BEING_PROCESSED: (ORDER.PAID, ORDER.PAYMENT_CANCELLED, ORDER.PAYMENT_ERROR),
-    ORDER.PAYMENT_ERROR: (ORDER.PAID, ORDER.PAYMENT_CANCELLED),
-    ORDER.PAYMENT_CANCELLED: (),
-    ORDER.PAID: (ORDER.COMPLETE, ORDER.FULFILLMENT_ERROR,),
+    ORDER.OPEN: (ORDER.COMPLETE, ORDER.FULFILLMENT_ERROR,),
     ORDER.FULFILLMENT_ERROR: (ORDER.COMPLETE, ORDER.REFUNDED,),
     ORDER.COMPLETE: (ORDER.REFUNDED,),
     ORDER.REFUNDED: (),
 }
 
 # This is a dict defining all the statuses a single line in an order may have.
-# TODO: Update to reflect new order (line) life cycle
 OSCAR_LINE_STATUS_PIPELINE = {
-    LINE.OPEN: (LINE.BEING_PROCESSED, LINE.ORDER_CANCELLED,),
-    LINE.ORDER_CANCELLED: (),
-    LINE.BEING_PROCESSED: (LINE.PAID, LINE.PAYMENT_CANCELLED,),
-    LINE.PAYMENT_CANCELLED: (),
-    LINE.PAID: (
+    LINE.OPEN: (
         LINE.COMPLETE,
         LINE.FULFILLMENT_CONFIGURATION_ERROR,
         LINE.FULFILLMENT_NETWORK_ERROR,
@@ -86,10 +74,6 @@ OSCAR_LINE_STATUS_PIPELINE = {
 # TODO: Update to reflect new order (line) life cycle
 OSCAR_ORDER_STATUS_CASCADE = {
     ORDER.OPEN: LINE.OPEN,
-    ORDER.BEING_PROCESSED: LINE.BEING_PROCESSED,
-    ORDER.ORDER_CANCELLED: LINE.ORDER_CANCELLED,
-    ORDER.PAID: LINE.PAID,
-    ORDER.PAYMENT_CANCELLED: LINE.PAYMENT_CANCELLED,
 }
 
 # Fulfillment Modules allows specific fulfillment modules to be evaluated in a specific order.

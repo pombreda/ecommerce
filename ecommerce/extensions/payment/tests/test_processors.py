@@ -19,7 +19,7 @@ from ecommerce.extensions.payment.processors import BasePaymentProcessor, Cybers
 from ecommerce.extensions.payment.errors import ExcessiveMerchantDefinedData
 from ecommerce.extensions.payment.constants import CybersourceConstants as CS
 from ecommerce.extensions.payment.constants import PaymentProcessorConstants as PPC
-from ecommerce.extensions.fulfillment.status import ORDER
+from ecommerce.extensions.order.constants import OrderStatus as ORDER
 
 
 User = get_user_model()

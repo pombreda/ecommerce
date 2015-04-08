@@ -9,8 +9,8 @@ from oscar.core.loading import get_model, get_class
 from ecommerce.extensions.checkout.mixins import EdxOrderPlacementMixin
 from ecommerce.extensions.payment.processors import Cybersource
 from ecommerce.extensions.payment.constants import PaymentProcessorConstants as PPC
-from ecommerce.extensions.api.constants import EcommerceAPIConstants as AC
-from ecommerce.extensions.fulfillment.status import ORDER
+from ecommerce.extensions.api.constants import APIConstants as AC
+from ecommerce.extensions.order.constants import OrderStatus as ORDER
 
 
 Free = get_class('shipping.methods', 'Free')

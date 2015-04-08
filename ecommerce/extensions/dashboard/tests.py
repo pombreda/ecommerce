@@ -7,7 +7,7 @@ from selenium.webdriver.firefox.webdriver import WebDriver
 from selenium.webdriver.support.wait import WebDriverWait
 
 from ecommerce.extensions.api.views import FulfillmentMixin
-from ecommerce.extensions.fulfillment.status import ORDER, LINE
+from ecommerce.extensions.order.constants import OrderStatus as ORDER, LineStatus as LINE
 
 
 Order = get_model('order', 'Order')

@@ -13,7 +13,7 @@ from django.conf import settings
 from rest_framework import status
 from oscar.apps.catalogue.models import ProductAttributeValue
 
-from ecommerce.extensions.fulfillment.status import LINE
+from ecommerce.extensions.order.constants import LineStatus as LINE
 
 
 logger = logging.getLogger(__name__)

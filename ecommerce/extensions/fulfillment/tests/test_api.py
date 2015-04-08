@@ -10,7 +10,7 @@ from oscar.test import factories
 from ecommerce.extensions.fulfillment.modules import FulfillmentModule
 from ecommerce.extensions.fulfillment import api as fulfillment_api
 from ecommerce.extensions.fulfillment import errors
-from ecommerce.extensions.fulfillment.status import ORDER, LINE
+from ecommerce.extensions.order.constants import OrderStatus as ORDER, LineStatus as LINE
 
 
 class FakeFulfillmentModule(FulfillmentModule):

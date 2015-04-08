@@ -11,7 +11,7 @@ from django.conf import settings
 from django.utils import importlib
 
 from ecommerce.extensions.fulfillment import errors
-from ecommerce.extensions.fulfillment.status import ORDER, LINE
+from ecommerce.extensions.order.constants import OrderStatus as ORDER, LineStatus as LINE
 
 
 logger = logging.getLogger(__name__)

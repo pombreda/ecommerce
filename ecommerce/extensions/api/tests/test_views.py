@@ -24,7 +24,7 @@ from ecommerce.extensions.api import errors, data
 from ecommerce.extensions.api.serializers import OrderSerializer
 from ecommerce.extensions.api.tests.test_authentication import AccessTokenMixin, OAUTH2_PROVIDER_URL
 from ecommerce.extensions.api.views import OrdersThrottle, FulfillmentMixin, OrderListCreateAPIView
-from ecommerce.extensions.fulfillment.status import LINE, ORDER
+from ecommerce.extensions.order.constants import OrderStatus as ORDER, LineStatus as LINE
 from ecommerce.extensions.order.utils import OrderNumberGenerator
 
 

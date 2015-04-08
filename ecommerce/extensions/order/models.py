@@ -2,7 +2,7 @@ from django.db import models
 from django.utils.translation import ugettext_lazy as _
 from oscar.apps.order.abstract_models import AbstractOrder
 
-from ecommerce.extensions.fulfillment.status import ORDER
+from ecommerce.extensions.order.constants import OrderStatus as ORDER
 
 
 class Order(AbstractOrder):

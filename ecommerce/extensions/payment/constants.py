@@ -3,7 +3,6 @@
 
 class PaymentEventNames(object):
     """Commonly used payment event names."""
-    PREAUTHORIZATION = u'preauthorization'
     SETTLEMENT = u'settlement'
 
 

@@ -2,7 +2,7 @@ import ddt
 from django.test import TestCase
 from oscar.test import factories
 
-from ecommerce.extensions.fulfillment.status import ORDER
+from ecommerce.extensions.order.constants import OrderStatus as ORDER
 
 
 @ddt.ddt

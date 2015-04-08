@@ -10,7 +10,7 @@ from rest_framework import status
 from oscar.test import factories
 
 from ecommerce.extensions.fulfillment.modules import FulfillmentModule, EnrollmentFulfillmentModule
-from ecommerce.extensions.fulfillment.status import ORDER, LINE
+from ecommerce.extensions.order.constants import OrderStatus as ORDER, LineStatus as LINE
 
 
 User = get_user_model()

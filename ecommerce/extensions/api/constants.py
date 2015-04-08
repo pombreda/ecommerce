@@ -1,7 +1,7 @@
 """Ecommerce API constants."""
 
 
-class EcommerceAPIDictionaryKeys(object):
+class APIDictionaryKeys(object):
     """Dictionary keys used repeatedly in the ecommerce API."""
     ORDER = u'order'
     ORDER_NUMBER = u'number'
@@ -11,6 +11,7 @@ class EcommerceAPIDictionaryKeys(object):
     PAYMENT_PARAMETERS = u'payment_parameters'
 
 
-class EcommerceAPIConstants(object):
+class APIConstants(object):
     """Constants used throughout the ecommerce API."""
-    KEYS = EcommerceAPIDictionaryKeys()
+    FREE = 0
+    KEYS = APIDictionaryKeys()

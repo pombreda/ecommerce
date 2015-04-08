@@ -9,7 +9,7 @@ errors explaining why fulfillment may fail.
 from oscar.apps.order import processing, exceptions
 
 from ecommerce.extensions.fulfillment import api as fulfillment_api
-from ecommerce.extensions.fulfillment.status import LINE
+from ecommerce.extensions.order.constants import LineStatus as LINE
 
 
 class EventHandler(processing.EventHandler):

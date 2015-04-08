@@ -7,7 +7,7 @@ from oscar.core.loading import get_model
 
 from ecommerce.extensions.payment.constants import PaymentProcessorConstants as PPC
 from ecommerce.extensions.payment.processors import BasePaymentProcessor
-from ecommerce.extensions.fulfillment.status import ORDER
+from ecommerce.extensions.order.constants import OrderStatus as ORDER
 
 
 ShippingEventType = get_model('order', 'ShippingEventType')

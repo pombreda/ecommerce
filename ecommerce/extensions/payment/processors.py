@@ -16,7 +16,7 @@ from ecommerce.extensions.payment.errors import (
 )
 from ecommerce.extensions.payment.constants import CybersourceConstants as CS
 from ecommerce.extensions.payment.constants import PaymentProcessorConstants as PPC
-from ecommerce.extensions.fulfillment.status import ORDER
+from ecommerce.extensions.order.constants import OrderStatus as ORDER
 
 
 logger = logging.getLogger(__name__)

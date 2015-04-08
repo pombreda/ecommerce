@@ -2,7 +2,7 @@ from oscar.core.loading import get_model
 from oscar.apps.checkout.mixins import OrderPlacementMixin
 
 from ecommerce.extensions.fulfillment.mixins import FulfillmentMixin
-from ecommerce.extensions.fulfillment.status import ORDER
+from ecommerce.extensions.order.constants import OrderStatus as ORDER
 from ecommerce.extensions.payment.constants import PaymentProcessorConstants as PPC
 
 
@@ -63,6 +63,4 @@ class EdxOrderPlacementMixin(OrderPlacementMixin, FulfillmentMixin):
 
     def get_initial_order_status(self, basket):
         """Returns the state in which newly-placed orders are expected to be."""
-        # TODO: Update order state pipeline to reflect new understanding of order placement;
-        # may require bumping API version
-        return ORDER.PAID
+        return ORDER.OPEN

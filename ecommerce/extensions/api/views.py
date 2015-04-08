@@ -12,8 +12,8 @@ from rest_framework.response import Response
 
 from ecommerce.extensions.api import data, errors, serializers
 from ecommerce.extensions.api.throttling import BasketsThrottle, OrdersThrottle
-from ecommerce.extensions.api.constants import EcommerceAPIConstants as AC
-from ecommerce.extensions.fulfillment.status import ORDER
+from ecommerce.extensions.api.constants import APIConstants as AC
+from ecommerce.extensions.order.constants import OrderStatus as ORDER
 from ecommerce.extensions.fulfillment.mixins import FulfillmentMixin
 from ecommerce.extensions.payment.helpers import get_default_payment_processor
 from ecommerce.extensions.checkout.mixins import EdxOrderPlacementMixin
@@ -38,8 +38,6 @@ class BasketCreateAPIView(EdxOrderPlacementMixin, CreateAPIView):
     """
     throttle_classes = (BasketsThrottle,)
     permission_classes = (IsAuthenticated,)
-
-    FREE = 0
 
     def create(self, request, *args, **kwargs):
         """Add a product to the authenticated user's basket.
@@ -208,7 +206,7 @@ class BasketCreateAPIView(EdxOrderPlacementMixin, CreateAPIView):
         )
 
         is_checkout = request.data.get('checkout')
-        response_data = self._checkout(basket) if is_checkout is True else self._generate_response_precursor(basket)
+        response_data = self._checkout(basket) if is_checkout is True else self._generate_basic_response(basket)
 
         return Response(response_data, status=status.HTTP_200_OK)
 
@@ -223,7 +221,7 @@ class BasketCreateAPIView(EdxOrderPlacementMixin, CreateAPIView):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    def _generate_response_precursor(self, basket):
+    def _generate_basic_response(self, basket):
         """Create a dictionary to be used as response data.
 
         The dictionary contains placeholders for a serialized order and payment parameters.
@@ -232,7 +230,7 @@ class BasketCreateAPIView(EdxOrderPlacementMixin, CreateAPIView):
             basket (Basket): The basket which should be serialized in the response data.
 
         Returns:
-            dict: Preliminary response data.
+            dict: Basic response data.
         """
         response_data = serializers.BasketSerializer(basket).data
         response_data[AC.KEYS.PAYMENT_PARAMETERS] = None
@@ -262,9 +260,9 @@ class BasketCreateAPIView(EdxOrderPlacementMixin, CreateAPIView):
             basket.id,
         )
 
-        response_data = self._generate_response_precursor(basket)
+        response_data = self._generate_basic_response(basket)
 
-        if basket.total_excl_tax == self.FREE:
+        if basket.total_excl_tax == AC.FREE:
             order_metadata = data.get_order_metadata(basket)
 
             # Place an order, attempting to fulfill it immediately
@@ -467,7 +465,7 @@ class OrderListCreateAPIView(FulfillmentMixin, ListCreateAPIView):
         payment_processor = get_default_payment_processor()
 
         order = self._prepare_order(basket, product, sku, payment_processor)
-        if order.status == ORDER.PAID:
+        if order.total_excl_tax == self.FREE:
             logger.info(
                 u"Attempting to immediately fulfill order [%s] totaling [%.2f %s]",
                 order.number,
@@ -529,16 +527,6 @@ class OrderListCreateAPIView(FulfillmentMixin, ListCreateAPIView):
             basket.id,
             payment_processor.NAME
         )
-
-        # Update the order to BEING_PROCESSED for all orders
-        order.set_status(ORDER.BEING_PROCESSED)
-
-        # If the product constituting the order is free, we mark the order
-        # as paid (as dictated by the order status pipeline) so that the
-        # fulfillment API will agree to fulfill it.
-        if order.total_excl_tax == self.FREE:
-            order.set_status(ORDER.PAID)
-            logger.info(u"Marked order [%s] as [%s]", order.number, ORDER.PAID)
 
         # Mark the basket as submitted
         basket.submit()

@@ -16,7 +16,7 @@ urlpatterns = patterns(
 
     # Oscar URLs
     url(r'^i18n/', include('django.conf.urls.i18n')),
-    # V1 DEPRECATION: Match only v2. This temporarily matches v1 or v2 while we increment to v2.
+    # V1 DEPRECATION: Match only v2. This temporarily matches v1 or v2 while we move to v2.
     url(r'^api/v[1-2]/', include(api.urls)),
     url(r'^payment/', include(payment.urls)),
 
