@@ -1,13 +1,13 @@
+# noinspection PyUnresolvedReferences
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
-from oscar.apps.order.abstract_models import AbstractOrder
+
+from oscar.apps.order.abstract_models import AbstractOrder, AbstractPaymentEvent
 
 from ecommerce.extensions.fulfillment.status import ORDER
 
 
 class Order(AbstractOrder):
-    payment_processor = models.CharField(_("Payment Processor"), max_length=32, blank=True)
-
     @property
     def is_paid(self):
         return self.status in [ORDER.PAID, ORDER.REFUNDED, ORDER.COMPLETE, ORDER.FULFILLMENT_ERROR]
@@ -46,5 +46,9 @@ class Order(AbstractOrder):
             return False
 
 
+class PaymentEvent(AbstractPaymentEvent):
+    processor_name = models.CharField(_("Payment Processor"), max_length=32, blank=True, null=True)
+
 # If two models with the same name are declared within an app, Django will only use the first one.
+# noinspection PyUnresolvedReferences
 from oscar.apps.order.models import *  # noqa pylint: disable=wildcard-import,unused-wildcard-import

@@ -63,7 +63,6 @@ class OrderSerializer(serializers.Serializer):
     )
     lines = LinesSerializer(many=True)
     billing_address = BillingAddressSerializer(allow_null=True)
-    payment_processor = serializers.CharField(max_length=32)
 
 
 class PaymentProcessorSerializer(serializers.Serializer):

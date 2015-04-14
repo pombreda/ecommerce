@@ -1,44 +1,76 @@
 """Payment processing classes containing logic specific to particular payment processors."""
-import uuid
+import abc
+import datetime
+from decimal import Decimal
 import json
 import logging
-import datetime
-from collections import OrderedDict
-from decimal import Decimal, InvalidOperation
+import uuid
 
 from django.conf import settings
+from oscar.apps.payment.exceptions import UserCancelled, GatewayError, TransactionDeclined
+from oscar.core.loading import get_model
 
-from ecommerce.extensions.order.models import Order
+from ecommerce.extensions.order.constants import PaymentEventTypeName
+from ecommerce.extensions.payment.constants import ISO_8601_FORMAT
+from ecommerce.extensions.payment.exceptions import (InvalidSignatureError, InvalidCyberSourceDecision,
+                                                     PartialAuthorizationError)
 from ecommerce.extensions.payment.helpers import sign
-from ecommerce.extensions.payment.errors import (
-    ExcessiveMerchantDefinedData, UserCancelled, PaymentDeclined, SignatureException,
-    CybersourceError, WrongAmountException, DataException, UnsupportedProductError
-)
-from ecommerce.extensions.payment.constants import CybersourceConstants as CS
-from ecommerce.extensions.payment.constants import ProcessorConstants as PC
-from ecommerce.extensions.fulfillment.status import ORDER
 
 
 logger = logging.getLogger(__name__)
 
+PaymentEvent = get_model('order', 'PaymentEvent')
+PaymentEventType = get_model('order', 'PaymentEventType')
+PaymentProcessorResponse = get_model('payment', 'PaymentProcessorResponse')
+Source = get_model('payment', 'Source')
+SourceType = get_model('payment', 'SourceType')
 
-class BasePaymentProcessor(object):
+
+class BasePaymentProcessor(object):  # pragma: no cover
     """Base payment processor class."""
+    __metaclass__ = abc.ABCMeta
+
     NAME = None
 
-    def get_transaction_parameters(
-            self,
-            order,
-            receipt_page_url=None,
-            cancel_page_url=None,
-            merchant_defined_data=None
-    ):
-        """Generate a dictionary of transaction parameters to be sent to a payment processor."""
-        raise NotImplementedError("Transaction parameters method not implemented.")
+    @abc.abstractmethod
+    def get_transaction_parameters(self, basket, receipt_page_url=None, cancel_page_url=None, **kwargs):
+        """
+        Generate a dictionary of signed parameters required for this processor to complete a transaction.
 
-    def handle_processor_response(self, params):
-        """ Handles the response from the payment processor """
-        raise NotImplementedError("Processor response method not implemented.")
+        Arguments:
+            basket (Basket): The basket of products being purchased..
+
+        Keyword Arguments:
+            receipt_page_url (unicode): If provided, overrides the receipt page URL on the Secure Acceptance
+                profile in use for this transaction.
+            cancel_page_url (unicode): If provided, overrides the cancellation page URL on the Secure Acceptance
+                profile in use for this transaction.
+
+        Returns:
+            dict: Payment processor-specific parameters required to complete a transaction.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def handle_processor_response(self, response, basket=None):
+        """
+        Handle a response from the payment processor.
+
+        This method does the following:
+            1. Verify the validity of the response.
+            2. Save the response to the database for auditing.
+            3. Create PaymentEvents and Sources for successful payments.
+
+        Args:
+            response (dict): Dictionary of parameters received from the payment processor.
+            basket (Basket): Basket being purchased via the payment processor.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def is_response_valid(self, response):
+        """ Returns a boolean indicating if the response from the payment processor is valid. """
+        raise NotImplementedError
 
     @property
     def configuration(self):
@@ -53,6 +85,23 @@ class BasePaymentProcessor(object):
         """
         return settings.PAYMENT_PROCESSOR_CONFIG[self.NAME]
 
+    def record_processor_response(self, transaction_id, response, basket=None):
+        """
+        Save the processor's response to the database for audting.
+
+        Arguments:
+            transaction_id (string): Identifier for the transaction on the payment processor's servers.
+            response (dict): Response received from the payment processor
+
+        Keyword Arguments:
+            basket (Basket): Basket associated with the payment event (e.g. being purchased)
+
+        Return
+            PaymentProcessorResponse
+        """
+        return PaymentProcessorResponse.objects.create(processor_name=self.NAME, transaction_id=transaction_id,
+                                                       response=response, basket=basket)
+
 
 class Cybersource(BasePaymentProcessor):
     """CyberSource Secure Acceptance Web/Mobile (February 2015)
@@ -60,7 +109,7 @@ class Cybersource(BasePaymentProcessor):
     For reference, see
     http://apps.cybersource.com/library/documentation/dev_guides/Secure_Acceptance_WM/Secure_Acceptance_WM.pdf.
     """
-    NAME = CS.NAME
+    NAME = u'cybersource'
 
     def __init__(self):
         """
@@ -74,18 +123,14 @@ class Cybersource(BasePaymentProcessor):
         self.profile_id = configuration['profile_id']
         self.access_key = configuration['access_key']
         self.secret_key = configuration['secret_key']
-        self.receipt_page_url = configuration['receipt_page_url']
-        self.cancel_page_url = configuration['cancel_page_url']
+        self.endpoint = configuration['pay_endpoint']
+        self.receipt_page_url = configuration.get('receipt_page_url')
+        self.cancel_page_url = configuration.get('cancel_page_url')
         self.language_code = settings.LANGUAGE_CODE
 
-    def get_transaction_parameters(
-            self,
-            order,
-            receipt_page_url=None,
-            cancel_page_url=None,
-            merchant_defined_data=None
-    ):
-        """Generate a dictionary of signed parameters CyberSource requires to complete a transaction.
+    def get_transaction_parameters(self, basket, receipt_page_url=None, cancel_page_url=None, **kwargs):
+        """
+        Generate a dictionary of signed parameters CyberSource requires to complete a transaction.
 
         Arguments:
             order (Order): The order whose line items are to be purchased as part of the transaction.
@@ -95,176 +140,109 @@ class Cybersource(BasePaymentProcessor):
                 profile in use for this transaction.
             cancel_page_url (unicode): If provided, overrides the cancellation page URL on the Secure Acceptance
                 profile in use for this transaction.
-            merchant_defined_data (list of string): If provided, each element in this list is added to the
-                transaction parameters, keyed under `merchant_defined_data<n>`, where `n` is the element's
-                one-based index in the list. The list itself cannot contain more than 100 elements, and should
-                not contain any personally identifying information.
 
         Returns:
             dict: CyberSource-specific parameters required to complete a transaction, including a signature.
         """
-        transaction_parameters = self._get_raw_transaction_parameters(
-            order,
-            receipt_page_url,
-            cancel_page_url,
-            merchant_defined_data
-        )
+        parameters = {
+            u'access_key': self.access_key,
+            u'profile_id': self.profile_id,
+            u'transaction_uuid': uuid.uuid4().hex,
+            u'signed_field_names': u'',
+            u'unsigned_field_names': u'',
+            u'signed_date_time': datetime.datetime.utcnow().strftime(ISO_8601_FORMAT),
+            u'locale': self.language_code,
+            u'transaction_type': u'sale',
+            u'reference_number': unicode(basket.id),
+            u'amount': unicode(basket.total_incl_tax),
+            u'currency': basket.currency,
+            u'consumer_id': basket.owner.username
+        }
 
-        transaction_parameters[CS.FIELD_NAMES.SIGNATURE] = self._generate_signature(transaction_parameters)
+        # TODO Include edX-specific data (e.g. course_id, seat type)
 
-        logger.info(
-            u"Signed CyberSource transaction parameters for order [%s]",
-            transaction_parameters.get(CS.FIELD_NAMES.REFERENCE_NUMBER)
-        )
+        # Allow the URL overrides passed directly to this method to override those pulled from settings.
+        cancel_page_url = cancel_page_url or self.cancel_page_url
+        if cancel_page_url:
+            parameters[u'override_custom_cancel_page'] = cancel_page_url
 
-        return transaction_parameters
-
-    def handle_processor_response(self, params):
-        """
-        Handle a response from the payment processor.
-
-        1) Verifies the parameters and determine if the payment was successful.
-        2) If successful, mark the order as purchased and send order to fulfillment
-        3) If unsuccessful, try to figure out why and log a helpful error message.
-        4) Return a dictionary of the form:
-            {'success': bool, 'order': unicode}
-
-        Args:
-            params (dict): Dictionary of parameters received from the payment processor.
-
-        Keyword Args:
-            Can be used to provide additional information to concrete implementations.
-
-        Returns:
-            dict
-
-        """
-        result = {PC.SUCCESS: False, PC.ORDER_NUMBER: None}
-        try:
-            valid_params = self._verify_signatures(params)
-            result[PC.ORDER_NUMBER] = valid_params[CS.FIELD_NAMES.REQ_REFERENCE_NUMBER]
-            if valid_params[CS.FIELD_NAMES.DECISION] == CS.ACCEPT:
-                # make sure the auth amount and currency is what we expect from Cybersource
-                self._check_payment_consistency(
-                    valid_params[CS.FIELD_NAMES.REQ_REFERENCE_NUMBER],
-                    valid_params[CS.FIELD_NAMES.AUTH_AMOUNT],
-                    valid_params[CS.FIELD_NAMES.REQ_CURRENCY]
-                )
-                result[PC.SUCCESS] = True
-        except CybersourceError:
-            logger.exception(u"Error handling CyberSource response.")
-            logger.info(json.dumps(params))
-        finally:
-            return result  # pylint: disable=lost-exception
-
-    def _get_raw_transaction_parameters(self, order, receipt_page_url, cancel_page_url, merchant_defined_data):
-        """Generate a dictionary of unsigned parameters CyberSource requires to complete a transaction.
-
-        The 'signed_field_names' parameter should be a string containing a comma-separated list of all keys in
-        the dictionary to be signed, including 'signed_field_names' itself. The value of this parameter is used
-        to determine which parameters to sign, although the signing itself occurs separately.
-
-        Arguments:
-            order (Order): The order whose line items are to be purchased as part of the transaction.
-            receipt_page_url (unicode): Overrides the receipt page URL on the Secure Acceptance profile
-                in use for this transaction.
-            cancel_page_url (unicode): Overrides the cancellation page URL on the Secure Acceptance profile
-                in use for this transaction.
-            merchant_defined_data (list of string): Each element in this list is added to the transaction
-                parameters, keyed under `merchant_defined_data<n>`, where `n` is the element's one-based index
-                in the list. The list itself cannot contain more than 100 elements, and should not contain any
-                personally identifying information.
-
-        Returns:
-            OrderedDict: CyberSource-specific parameters required to complete a transaction. An OrderedDict is
-                used to facilitate testing. Keys are joined into a comma separated list which then signed to
-                generate a digital signature. If the order of the keys is non-deterministic, then the signature
-                might change, which could cause test failures. Testing aside, there's value in ensuring that the
-                signatures we generate are deterministic and reproducible.
-
-        Raises:
-            ExcessiveMerchantDefinedData: If the provided merchant-defined data exceeds CyberSource's
-                optional field limit.
-        """
-        parameters = OrderedDict()
-
-        # Access token used for authentication with Secure Acceptance.
-        parameters[CS.FIELD_NAMES.ACCESS_KEY] = self.access_key
-
-        # Identifier representing the Secure Acceptance profile to use with this transaction.
-        parameters[CS.FIELD_NAMES.PROFILE_ID] = self.profile_id
-
-        # Identifier representing the charge to which this transaction relates; must be a string.
-        # For context, say you were to perform a charge as a two-step process where you initially
-        # authorize through Secure Acceptance, then later process the settlement. Although they
-        # are two separate transactions, when taken together the authorization and the settlement
-        # constitute one charge. As such, they would be assigned the same reference number.
-        parameters[CS.FIELD_NAMES.REFERENCE_NUMBER] = order.number
-
-        # Unique identifier associated with this transaction; must be a string.
-        parameters[CS.FIELD_NAMES.TRANSACTION_UUID] = uuid.uuid4().hex
-
-        # One of the Secure Acceptance transaction types.
-        parameters[CS.FIELD_NAMES.TRANSACTION_TYPE] = CS.TRANSACTION_TYPE
-
-        # One of the Secure Acceptance payment methods.
-        parameters[CS.FIELD_NAMES.PAYMENT_METHOD] = CS.PAYMENT_METHOD
-
-        # ISO currency code representing the currency in which to conduct the transaction.
-        parameters[CS.FIELD_NAMES.CURRENCY] = order.currency
-
-        # Total amount to be charged. May contain numeric characters and a decimal point; must be a string.
-        parameters[CS.FIELD_NAMES.AMOUNT] = unicode(order.total_excl_tax)
-
-        # IETF language tag representing the language to use for customer-facing content.
-        parameters[CS.FIELD_NAMES.LOCALE] = self.language_code
+        if self.receipt_page_url and not receipt_page_url:
+            receipt_page_url = u'{}?basket_id={}'.format(self.receipt_page_url, basket.id)
 
         if receipt_page_url:
-            parameters[CS.FIELD_NAMES.OVERRIDE_CUSTOM_RECEIPT_PAGE] = receipt_page_url
-        elif self.receipt_page_url:
-            parameters[CS.FIELD_NAMES.OVERRIDE_CUSTOM_RECEIPT_PAGE] = self._generate_receipt_url(order)
+            parameters[u'override_custom_receipt_page'] = receipt_page_url
 
-        if cancel_page_url:
-            parameters[CS.FIELD_NAMES.OVERRIDE_CUSTOM_CANCEL_PAGE] = cancel_page_url
-        elif self.cancel_page_url:
-            parameters[CS.FIELD_NAMES.OVERRIDE_CUSTOM_CANCEL_PAGE] = self.cancel_page_url
-
-        if merchant_defined_data:
-            if len(merchant_defined_data) > CS.MAX_OPTIONAL_FIELDS:
-                raise ExcessiveMerchantDefinedData
-            else:
-                for n, data in enumerate(merchant_defined_data, start=1):
-                    parameters[CS.FIELD_NAMES.MERCHANT_DEFINED_DATA_BASE + unicode(n)] = data
-
-        # A string in ISO 8601 format representing the time at which the transaction parameters were signed.
-        parameters[CS.FIELD_NAMES.SIGNED_DATE_TIME] = datetime.datetime.utcnow().strftime(CS.ISO_8601_FORMAT)
-
-        # Transaction parameters which are to be signed or unsigned; must be strings containing comma-separated keys.
-        parameters[CS.FIELD_NAMES.UNSIGNED_FIELD_NAMES] = CS.UNSIGNED_FIELD_NAMES
-        parameters[CS.FIELD_NAMES.SIGNED_FIELD_NAMES] = CS.UNSIGNED_FIELD_NAMES
-        # NOTE: This currently joins all keys in the dictionary, and as such should be the last item added to
-        # the parameters dictionary before returning it.
-        parameters[CS.FIELD_NAMES.SIGNED_FIELD_NAMES] = CS.SEPARATOR.join(parameters.keys())
-
-        logger.info(u"Generated unsigned CyberSource transaction parameters for order [%s]", order.number)
+        # Sign all fields
+        signed_field_names = parameters.keys()
+        parameters[u'signed_field_names'] = u','.join(sorted(signed_field_names))
+        parameters[u'signature'] = self._generate_signature(parameters)
 
         return parameters
 
-    def _generate_receipt_url(self, order):
-        """Generate the full receipt URL based off the order.
+    def handle_processor_response(self, response, basket=None):
+        """
+        Handle a response from the payment processor.
 
-        Takes the receipt page URL and modifies it to display a single order.
+        This method does the following:
+            1. Verify the validity of the response.
+            2. Create PaymentEvents and Sources for successful payments.
 
         Args:
-            order (Order): The order the receipt represents
+            response (dict): Dictionary of parameters received from the payment processor.
+            basket (Basket): Basket being purchased via the payment processor.
 
-        Returns:
-            string: The string representation of the receipt URL for this order.
-
+        Raises:
+            UserCancelled: Indicates the user cancelled payment.
+            TransactionDeclined: Indicates the payment was declined by the processor.
+            GatewayError: Indicates a general error on the part of the processor.
+            InvalidCyberSourceDecision: Indicates an unknown decision value.
+                Known values are ACCEPT, CANCEL, DECLINE, ERROR.
         """
-        return "{base_url}?payment-order-num={order_number}".format(
-            base_url=self.receipt_page_url, order_number=order.number
-        )
+
+        # Validate the signature
+        if not self.is_response_valid(response):
+            logger.info(u'CyberSource payment processor received a response with an invalid signature: %s',
+                        json.dumps(response))
+            raise InvalidSignatureError
+
+        # Raise an exception for payments that were not accepted. Consuming code should be responsible for handling
+        # and logging the exception.
+        decision = response[u'decision'].lower()
+        if decision != u'accept':
+            exception = {
+                u'cancel': UserCancelled,
+                u'decline': TransactionDeclined,
+                u'error': GatewayError
+            }.get(decision, InvalidCyberSourceDecision)
+
+            raise exception
+
+        # Raise an exception if the authorized amount differs from the requested amount.
+        # Note (CCB): We should never reach this point in production since partial authorization is disabled
+        # for our account, and should remain that way until we have a proper solution to allowing users to
+        # complete authorization for the entire order.
+        if response[u'auth_amount'] != response[u'req_amount']:
+            raise PartialAuthorizationError
+
+        # Create Source to track all transactions related to this processor and order
+        source_type, __ = SourceType.objects.get_or_create(name=self.NAME)
+        currency = response[u'req_currency']
+        total = Decimal(response[u'req_amount'])
+        transaction_id = response[u'transaction_id']
+
+        source = Source(source_type=source_type,
+                        currency=currency,
+                        amount_allocated=total,
+                        amount_debited=total,
+                        reference=transaction_id)
+
+        # Create PaymentEvent to track
+        event_type, __ = PaymentEventType.objects.get_or_create(name=PaymentEventTypeName.PAID)
+        event = PaymentEvent(event_type=event_type, amount=total, reference=transaction_id, processor_name=self.NAME)
+
+        # TODO Handle case where auth_amount is not equal to the basket total.
+
+        return source, event
 
     def _generate_signature(self, parameters):
         """Sign the contents of the provided transaction parameters dictionary.
@@ -283,168 +261,12 @@ class Cybersource(BasePaymentProcessor):
         Returns:
             unicode: the signature for the given parameters
         """
-        target_parameters = parameters[CS.FIELD_NAMES.SIGNED_FIELD_NAMES].split(CS.SEPARATOR)
+        keys = parameters[u'signed_field_names'].split(u',')
         # Generate a comma-separated list of keys and values to be signed. CyberSource refers to this
         # as a 'Version 1' signature in their documentation.
-        message = CS.SEPARATOR.join(
-            [CS.MESSAGE_SUBSTRUCTURE.format(
-                key=key, value=parameters.get(key)
-            ) for key in target_parameters]
-        )
+        message = u','.join([u'{key}={value}'.format(key=key, value=parameters.get(key)) for key in keys])
 
         return sign(message, self.secret_key)
 
-    def _check_payment_consistency(self, order_num, auth_amount, currency):
-        """
-        After the payment has successfully been completed, we need to verify that the authorized amount and the currency
-        match what we expect based on the order number.
-
-        Args:
-            order_num (str): order number of the order being processed
-            auth_amount (num): the amount being paid
-
-        Raises:
-            ProcessorWrongAmountException: indicates that the processor has passed us the wrong amount
-                compared to what we expect from our own DB
-
-        Returns:
-            None
-        """
-        try:
-            if not Order.check_order_total(order_num, auth_amount, currency):
-                raise WrongAmountException(
-                    u"The amount charged by the processor [{charged_amount}] [{charged_amount_currency}] is different "
-                    u"than the total cost of the order for order [{order_number}].".format(
-                        charged_amount=auth_amount,
-                        charged_amount_currency=currency,
-                        order_number=order_num
-                    )
-                )
-
-        except Order.DoesNotExist:
-            raise DataException(
-                "The payment processor accepted an order with number [{number}] that is not in our system."
-                .format(number=order_num)
-            )
-
-    def _verify_signatures(self, params):
-        """
-        Use the signature we receive in the POST back from CyberSource to verify
-        the identity of the sender (CyberSource) and that the contents of the message
-        have not been tampered with.
-
-        Args:
-            params (dictionary): The POST parameters we received from CyberSource.
-
-        Returns:
-            dict: Contains the parameters we will use elsewhere, converted to the
-                appropriate types
-
-        Raises:
-            ProcessorSignatureException: The calculated signature does not match
-                the signature we received.
-
-            ProcessorDataException: The parameters we received from CyberSource were not valid
-                (missing keys, wrong types)
-
-            ProcessorUserCancelled: The user cancelled the transaction.
-
-            ProcessorUserDeclined: The payment was declined by the user.
-
-        """
-
-        # If the user cancels the transaction, the auth_amount will not be
-        # passed back, so we can't yet verify signatures.
-        if params.get(CS.FIELD_NAMES.DECISION) == CS.CANCEL:
-            self._mark_status(params.get(CS.FIELD_NAMES.REQ_REFERENCE_NUMBER), ORDER.PAYMENT_CANCELLED)
-            raise UserCancelled()
-
-        # If the processor declines the transaction, the auth_amount will
-        # not be passed back so we can't yet verify signatures.
-        elif params.get(CS.FIELD_NAMES.DECISION) == CS.DECLINE:
-            self._mark_status(params.get(CS.FIELD_NAMES.REQ_REFERENCE_NUMBER), ORDER.PAYMENT_ERROR)
-            raise PaymentDeclined()
-
-        # If the processor tells us there's an error, update the status of the order.
-        elif params.get(CS.FIELD_NAMES.DECISION) == CS.ERROR:
-            self._mark_status(params.get(CS.FIELD_NAMES.REQ_REFERENCE_NUMBER), ORDER.PAYMENT_ERROR)
-
-        # Validate the signature to ensure that the message is from CyberSource
-        # and has not been tampered with.
-        returned_sig = params.get(CS.FIELD_NAMES.SIGNATURE, '')
-        if self._generate_signature(params) != returned_sig:
-            raise SignatureException()
-
-        # Validate that we have the parameters we expect and can convert them
-        # to the appropriate types.
-        # Usually validating the signature is sufficient to validate that these
-        # fields exist, but since we're relying on CyberSource to tell us
-        # which fields they included in the signature, we need to be careful.
-        valid_params = {}
-        required_params = [
-            (CS.FIELD_NAMES.REQ_REFERENCE_NUMBER, unicode),
-            (CS.FIELD_NAMES.REQ_CURRENCY, unicode),
-            (CS.FIELD_NAMES.DECISION, unicode),
-            (CS.FIELD_NAMES.AUTH_AMOUNT, Decimal),
-        ]
-        for key, key_type in required_params:
-            if key not in params:
-                raise DataException(
-                    u"The payment processor did not return a required parameter: [{parameter}]".format(parameter=key)
-                )
-            try:
-                valid_params[key] = key_type(params[key])
-            except (ValueError, TypeError, InvalidOperation):
-                raise DataException(
-                    u"The payment processor returned a badly-typed value [{value}] for parameter [{parameter}].".format(
-                        value=params[key], parameter=key
-                    )
-                )
-
-        return valid_params
-
-    def _mark_status(self, order_num, status):
-        """ Mark a change in the status of an order. """
-        try:
-            order = Order.objects.get(number=order_num)
-            order.set_status(status)
-        except Order.DoesNotExist:
-            raise DataException(
-                "The payment processor accepted an order with number [{number}] that is not in our system."
-                .format(number=order_num)
-            )
-
-
-class SingleSeatCybersource(Cybersource):
-    """Payment Processor limited to supporting a single seat. """
-
-    def _generate_receipt_url(self, order):
-        """Generate the full receipt URL based off the order.
-
-        Takes the receipt page URL and modifies it to display a single order.
-
-        Args:
-            order (Order): The order the receipt represents
-
-        Returns:
-            string: The string representation of the receipt URL for this order.
-
-        """
-        # TODO: Right now, our receipt page only supports the purchase of Course Seats, and assumes that an order
-        # is relative to a single course. This function will try and get a course ID to construct the URL. Once our
-        # receipt page supports donations, cohorts, and other products, we will need a generic URL that can be
-        # constructed simply from the order number.
-        # This issue should be resolved by completing JIRA Ticket XCOM-202
-        line = order.lines.all()[0]
-        if line and line.product.get_product_class().name == 'Seat':
-            course_key = line.product.attribute_values.get(attribute__name="course_key").value
-            return "{base_url}{course_key}/?payment-order-num={order_number}".format(
-                base_url=self.receipt_page_url, course_key=course_key, order_number=order.number
-            )
-        else:
-            msg = (
-                u'Cannot construct a receipt URL for order [{order_number}]. Receipt page only supports Seat products.'
-                .format(order_number=order.number)
-            )
-            logger.error(msg)
-            raise UnsupportedProductError(msg)
+    def is_response_valid(self, response):
+        return response and (self._generate_signature(response) == response.get(u'signature'))

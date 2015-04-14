@@ -43,6 +43,6 @@ def sign(message, secret):
     digest = hmac.new(secret, msg=message, digestmod=hashlib.sha256).digest()
 
     # Base64-encode the message hash
-    signature = base64.b64encode(digest).decode()
+    signature = base64.b64encode(digest)
 
     return signature

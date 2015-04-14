@@ -253,8 +253,7 @@ class OrderListCreateAPIView(FulfillmentMixin, ListCreateAPIView):
             shipping_charge,
             user=basket.owner,
             order_number=OrderNumberGenerator.order_number(basket),
-            status=ORDER.OPEN,
-            payment_processor=payment_processor.NAME
+            status=ORDER.OPEN
         )
 
         logger.info(
@@ -284,7 +283,7 @@ class OrderListCreateAPIView(FulfillmentMixin, ListCreateAPIView):
     def _assemble_order_data(self, order, payment_processor):
         """Assemble a dictionary of metadata for the provided order."""
         order_data = serializers.OrderSerializer(order).data
-        order_data['payment_parameters'] = payment_processor().get_transaction_parameters(order)
+        order_data['payment_parameters'] = payment_processor().get_transaction_parameters(order.basket)
 
         return order_data
 
