@@ -22,8 +22,10 @@ OSCAR_APPS = [
 ] + get_core_apps([
     'ecommerce.extensions.analytics',
     'ecommerce.extensions.catalogue',
+    'ecommerce.extensions.checkout',
     'ecommerce.extensions.order',
     'ecommerce.extensions.partner',
+    'ecommerce.extensions.payment',
 ])
 # END APP CONFIGURATION
 
